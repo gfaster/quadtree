@@ -7,3 +7,10 @@ edition = "2021"
 
 [dependencies]
 
+[lib]
+name = "quadtree"
+path = "src/lib.rs"
+
+# [[bin]]
+# name = "playground"
+# path = "src/playground.rs"
