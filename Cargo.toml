@@ -2,19 +2,3 @@
 name = "quadtree"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-fastrand = "2.0.0"
-
-[lib]
-name = "quadtree"
-path = "src/lib.rs"
-
-[[bin]]
-name = "playground"
-path = "src/playground.rs"
-
-[profile.release]
-debug = true
