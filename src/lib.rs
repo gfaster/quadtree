@@ -1,17 +1,16 @@
 #![no_std]
 
-pub struct MyStruct;
+struct MyStruct;
 
-fn my_fn<F, T>(m: &mut [T], mut compare: F)
+fn my_fn<F, T>(f: F)
 where
-    F: FnMut(&T, &T) -> (),
+    F: Fn(&T, &T) -> (),
 { }
 
-/// offending function
 fn rustc_panic() {
-    // let _ = |a: MyStruct, b: MyStruct| a.partial_cmp(b).unwrap();
 
-    my_fn(&mut [MyStruct], |a, b| {
+    // the unit struct does not work
+    my_fn::<_, MyStruct>( |a, b| {
         a.partial_cmp(b)
     });
 
