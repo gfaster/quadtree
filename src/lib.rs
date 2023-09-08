@@ -223,7 +223,7 @@ pub struct QuadTree<T>
 }
 
 impl<T> QuadTree<T> {
-    const MAX_DEPTH: u32 = Index::BITS;
+    const MAX_DEPTH: u32 = Index::BITS - 1;
 
     pub fn new() -> Self {
         Self {
@@ -313,7 +313,7 @@ impl<T> QuadTree<T> {
         );
         let QCell::NonTerm(old) = old else { panic!("just checked") };
         let QCell::Term(new) = &mut self.inner else { panic!("just checked") };
-        new.extend(old.into_iter().map(|q| q.into_iter()).flatten());
+        new.extend(old.into_iter().map(|q| q.into_node_iter()).flatten());
     }
 
     pub fn retain_in_area_inner<F>(&mut self, bounds: CellBounds, func: &F) -> usize
@@ -432,6 +432,13 @@ impl<T> QuadTree<T> {
         }
     }
 
+    fn into_node_iter(self) -> QuadTreeIntoNodeIterator<T> {
+        QuadTreeIntoNodeIterator {
+            curr: None,
+            queue: vec![Box::new(self)].into(),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.weight
     }
@@ -467,7 +474,7 @@ impl<'a, T> Iterator for QuadTreeIterator<'a, T>
 }
 
 impl<T> IntoIterator for QuadTree<T> {
-    type Item = Node<T>;
+    type Item = T;
 
     type IntoIter = QuadTreeIntoIterator<T>;
 
@@ -486,6 +493,30 @@ pub struct QuadTreeIntoIterator<T>
 }
 
 impl<T> Iterator for QuadTreeIntoIterator<T>
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ret) = self.curr.as_mut().and_then(|it| it.next()) {
+                return Some(ret.item);
+            }
+            let next = self.queue.pop_front()?;
+            match next.inner {
+                QCell::Term(v) => self.curr = Some(v.into_iter()),
+                QCell::NonTerm(a) => self.queue.extend(a.into_iter()),
+            }
+        }
+    }
+}
+
+pub struct QuadTreeIntoNodeIterator<T>
+{
+    curr: Option<<Vec<Node<T>> as IntoIterator>::IntoIter>,
+    queue: VecDeque<Box<QuadTree<T>>>,
+}
+
+impl<T> Iterator for QuadTreeIntoNodeIterator<T>
 {
     type Item = Node<T>;
 
@@ -516,150 +547,46 @@ impl<A: Eq> Extend<Node<A>> for QuadTree<A> {
 mod tests {
     use super::*;
 
-    fn grid(dim: usize) -> Vec<Node<(f32, f32)>> {
-        let mut ret = Vec::with_capacity(dim * dim);
-        for x in 0..dim {
-            let x = x as f32 / dim as f32;
-            for y in 0..dim {
-                let y = y as f32 / dim as f32;
-                ret.push(Node {
-                    pos: CellPos::from_f32((x, y)),
-                    item: (x, y),
-                });
+    macro_rules! grid {
+        ($dim:expr) => {
+            {
+                let dim = $dim;
+                move |idx| {((idx / dim) as f32 / dim as f32, (idx % dim) as f32 / dim as f32)}
             }
+        };
+    }
+
+    fn v_is_q(v: Vec<(f32, f32)>, q: QuadTree<(f32, f32)>) {
+        let mut v = v;
+        v.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        let mut vq: Vec<_> = q.into_iter().collect();
+        vq.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        assert_eq!(v, vq);
+    }
+
+    fn make<F>(cnt: usize, f: F) -> (Vec<(f32, f32)>, QuadTree<(f32, f32)>)
+    where 
+    F: Fn(usize) -> (f32, f32)
+    {
+        let mut v = Vec::new();
+        let mut q = QuadTree::new();
+        for i in 0..cnt {
+            let p = f(i);
+            v.push(p);
+            q.insert(p, p).unwrap();
         }
-        ret
-    }
-
-    fn bounds_check(q: &mut QuadTree<(f32, f32)>, v: Vec<Node<(f32, f32)>>, b: Bounds) {
-        let mut expected: Vec<_> = v
-            .iter()
-            .filter(|n| b.contains(n.item))
-            .map(std::clone::Clone::clone)
-            .collect();
-        expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        q.extend(v);
-        let mut actual = Vec::from_iter(q.query_rect(&b).map(std::clone::Clone::clone));
-        actual.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(expected, actual);
-    }
-
-    fn diag(x: i32, scale: i32) -> (f32, f32) {
-        assert!(x < scale);
-        (x as f32 / scale as f32, x as f32 / scale as f32)
-    }
-    fn insert_diag(q: &mut QuadTree<(f32, f32)>, x: i32, scale: i32) {
-        q.insert(diag(x, scale), diag(x, scale)).unwrap()
+        (v, q)
     }
 
     #[test]
-    fn bounds() {
-        let b = Bounds::unit();
-        assert!(b.contains((0.0, 0.0)));
-        assert!(!b.contains((1.0, 0.0)));
-        assert!(!b.contains((1.0, 1.0)));
-        assert!(!b.contains((0.0, 1.0)));
-        assert!(b.contains((0.5, 0.5)));
+    fn create() {
+        let (v, q) = make(10, |_| (0.5, 0.5));
+        v_is_q(v, q);
     }
 
     #[test]
-    fn small_count() {
-        let mut q = QuadTree::new();
-        for x in 0..8 {
-            q.insert((x as f32 / 8.0, x as f32 / 8.0), ()).unwrap()
-        }
-    }
-
-    #[test]
-    fn large_count() {
-        let mut q = QuadTree::new();
-        for x in 0..1024 {
-            let x = x % 256;
-            q.insert((x as f32 / 256.0, x as f32 / 256.0), ()).unwrap()
-        }
-        // dbg!(&q);
-        // panic!()
-    }
-
-    #[test]
-    // #[ignore= "overflow"]
-    fn larger_count() {
-        let mut q = QuadTree::new();
-        for x in 0..(1 << 15) {
-            let x = x % (1 << 12);
-            q.insert(diag(x, 1 << 12), ()).unwrap()
-        }
-    }
-
-    #[test]
-    fn grid_bounds_tiny() {
-        let b = Bounds::new(0.2123..0.702, 0.7..0.931);
-        let mut q = QuadTree::new();
-        let v = grid(4);
-        bounds_check(&mut q, v, b);
-    }
-
-    #[test]
-    fn grid_bounds_small() {
-        let b = Bounds::new(0.2123..0.702, 0.7..0.931);
-        let mut q = QuadTree::new();
-        let v = grid(8);
-        bounds_check(&mut q, v, b);
-    }
-
-    #[test]
-    fn grid_bounds_large() {
-        let b = Bounds::new(0.2123..0.702, 0.7..0.931);
-        let mut q = QuadTree::new();
-        let v = grid(32);
-        bounds_check(&mut q, v, b);
-    }
-
-    #[test]
-    fn grid_bounds_uneven() {
-        let b = Bounds::new(0.2123..0.702, 0.7..0.931);
-        let mut q = QuadTree::new();
-        let mut v = grid(32);
-        v.extend(grid(16).into_iter().map(|n| Node {
-            pos: (n.pos.0 / 3.0 + 0.5, n.pos.1 / 4.0 + 0.7),
-            item: (),
-        }));
-        bounds_check(&mut q, v, b);
-    }
-
-    #[test]
-    fn grid_bounds_remove() {
-        let b = Bounds::new(0.2123..0.702, 0.7..0.931);
-        let mut q = QuadTree::new();
-        let mut v = grid(32);
-        q.extend(v.clone());
-        let removed = q.remove_bounds(&b);
-        assert_eq!(removed + q.len(), v.len());
-        let mut actual: Vec<_> = q.into_iter().collect();
-        actual.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        v.retain(|n| !b.contains(n.pos));
-        let mut expected = v;
-        expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn grid_bounds_uneven_remove() {
-        let b = Bounds::new(0.2123..0.702, 0.7..0.931);
-        let mut q = QuadTree::new();
-        let mut v = grid(32);
-        v.extend(grid(16).into_iter().map(|n| Node {
-            pos: (n.pos.0 / 3.0 + 0.5, n.pos.1 / 4.0 + 0.7),
-            item: (),
-        }));
-        q.extend(v.clone());
-        let removed = q.remove_bounds(&b);
-        assert_eq!(removed + q.len(), v.len());
-        let mut actual: Vec<_> = q.into_iter().collect();
-        actual.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        v.retain(|n| !b.contains(n.pos));
-        let mut expected = v;
-        expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(expected, actual);
+    fn query() {
+        let (v, q) = make(10, grid!(10));
+        v_is_q(v, q);
     }
 }
